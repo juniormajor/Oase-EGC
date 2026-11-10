@@ -82,11 +82,29 @@ def rdm_value(payload):
 def s16(b, off=0):
     return struct.unpack(">h", b[off:off+2])[0] if len(b)>=off+2 else None
 
+def _cert_base():
+    return "/data" if os.path.isdir("/data") and os.access("/data", os.W_OK) else tempfile.gettempdir()
+
+def _cert_paths():
+    b=_cert_base(); return os.path.join(b,"oase_tls_cert.pem"), os.path.join(b,"oase_tls_key.pem")
+
+def drop_cert():
+    for f in _cert_paths():
+        try: os.remove(f)
+        except Exception: pass
+
+def _ensure_cert():
+    c,k=_cert_paths()
+    if not (os.path.exists(c) and os.path.exists(k)):
+        # 100 Jahre Gueltigkeit: toleriert Uhr-Versatz beim Boot (NTP noch nicht synchron)
+        subprocess.run(["openssl","req","-x509","-newkey","rsa:2048","-keyout",k,"-out",c,
+                        "-days","36500","-nodes","-subj","/CN=com.oase.easycontrol"],
+                       check=True, capture_output=True)
+        log.info("TLS-Zertifikat erzeugt: %s", c)
+    return c,k
+
 def make_server_ctx():
-    d=tempfile.mkdtemp(); c=os.path.join(d,"c.pem"); k=os.path.join(d,"k.pem")
-    subprocess.run(["openssl","req","-x509","-newkey","rsa:2048","-keyout",k,"-out",c,
-                    "-days","3650","-nodes","-subj","/CN=com.oase.easycontrol"],
-                   check=True, capture_output=True)
+    c,k=_ensure_cert()
     ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(c,k)
     try: ctx.minimum_version=ssl.TLSVersion.TLSv1
     except Exception: pass
@@ -138,7 +156,13 @@ class OnetSession:
             raise TimeoutError("Controller hat nicht zurueckverbunden (Firewall/IP pruefen)")
         stop.set()
         log.info("Controller verbunden von %s", addr[0])
-        self.sock=make_server_ctx().wrap_socket(raw, server_side=True); self.sock.settimeout(8)
+        try:
+            self.sock=make_server_ctx().wrap_socket(raw, server_side=True)
+        except ssl.SSLError as e:
+            if "EXPIRED" in str(e).upper() or "CERTIFICATE" in str(e).upper():
+                drop_cert(); log.warning("TLS-Cert verworfen (Fehler: %s) - wird neu erzeugt", e)
+            raise
+        self.sock.settimeout(8)
         self._buf=b""
         self.request(PT_ALIVE, b"", PT_ALIVE_R)
         if self.password:
