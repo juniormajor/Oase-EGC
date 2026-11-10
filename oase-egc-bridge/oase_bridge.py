@@ -206,7 +206,9 @@ class OnetSession:
             md=self.rdm_get(m,d,0x8038)
             if md is not None and len(md)>=1: st["sfc"]=md[0]!=0
         except Exception as e: log.debug("sfc:%s",e)
-        try: st["sfc_level"]=s16(self.rdm_get(m,d,0x0201,bytes([9])),1)
+        try:
+            lv=s16(self.rdm_get(m,d,0x0201,bytes([9])),1)
+            if lv is not None: st["sfc_level"]={0:"Max",1:"Med",2:"Min"}.get(lv, str(lv))
         except Exception as e: log.debug("sfclvl:%s",e)
         try:
             pw=self.rdm_get(m,d,0x1010)
@@ -363,7 +365,7 @@ def publish_discovery(c, pump):
     cfg("number","speed",{"name":"Manuelle Leistung","command_topic":CMD_SPEED,"state_topic":f"{NODE}/speed_pct","min":0,"max":100,"step":1,"unit_of_measurement":"%","icon":"mdi:fan"})
     cfg("switch","power",{"name":"Pumpe","command_topic":CMD_POWER,"state_topic":f"{NODE}/power_state","payload_on":"ON","payload_off":"OFF","icon":"mdi:water-pump"})
     cfg("switch","sfc",{"name":"SFC-Automatik","command_topic":CMD_SFC,"state_topic":f"{NODE}/sfc","payload_on":"ON","payload_off":"OFF","icon":"mdi:thermostat"})
-    cfg("sensor","sfc_level",{"name":"SFC-Stufe","state_topic":f"{NODE}/sfc_level","state_class":"measurement","entity_category":"diagnostic","icon":"mdi:stairs"})
+    cfg("sensor","sfc_level",{"name":"SFC-Stufe","state_topic":f"{NODE}/sfc_level","device_class":"enum","options":["Max","Med","Min"],"entity_category":"diagnostic","icon":"mdi:stairs"})
     cfg("binary_sensor","online",{"name":"Online","state_topic":f"{NODE}/online","payload_on":"ON","payload_off":"OFF","device_class":"connectivity","entity_category":"diagnostic"})
 
 def publish_state(c, st):
