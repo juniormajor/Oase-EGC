@@ -344,7 +344,9 @@ def publish_state(c, st):
 
 def run_bridge():
     if not MQTT_HOST:
-        log.error("Kein MQTT-Broker (Supervisor-Service fehlt?)."); return
+        log.error("Kein MQTT-Broker konfiguriert. Setze in den Add-on-Optionen "
+                  "mqtt_host (Name oder IP), mqtt_port, mqtt_user, mqtt_pass. Warte 30s ...")
+        time.sleep(30); return
     mc=mqtt_connect()
     while True:
         sess=OnetSession(IP, PASSWORD)
