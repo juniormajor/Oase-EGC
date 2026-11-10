@@ -195,29 +195,28 @@ class OnetSession:
             if sp: st["speed_raw"]=sp[0]; st["speed_pct"]=round(sp[0]*100/255)
         except Exception as e: log.debug("sp:%s",e)
         if st.get("speed_raw") and st["speed_raw"]>0: self.last_speed=st["speed_raw"]
-        # Ein/Aus aus Pump_Mode (0x8038 = FcOnOff): 0 = aus
+        # SFC-Automatik (0x8038): 0 = aus (manuell), sonst an
         try:
             md=self.rdm_get(m,d,0x8038)
-            if md is not None and len(md)>=1:
-                st["mode"]=md[0]; st["on"]=md[0]!=0
-                if md[0]!=0: self.last_mode=md[0]
-        except Exception as e: log.debug("mode:%s",e)
-        if "on" not in st and st.get("rpm") is not None:
-            st["on"]=st["rpm"]>50
+            if md is not None and len(md)>=1: st["sfc"]=md[0]!=0
+        except Exception as e: log.debug("sfc:%s",e)
+        try: st["sfc_level"]=s16(self.rdm_get(m,d,0x0201,bytes([9])),1)
+        except Exception as e: log.debug("sfclvl:%s",e)
         if st.get("power_w") is not None and st["power_w"]<0:
             st["power_w"]=0
         return st
 
+    def set_sfc(self, pump, on):
+        self._pidrdm_set(pump["index"], 0x8038, bytes([1 if on else 0]))
+        log.info("SFC-Automatik %s", "AN" if on else "AUS")
+
     def set_speed_pct(self, pump, pct):
+        # Manueller Speed wirkt nur ohne SFC -> erst SFC aus, dann 0x8039 setzen
+        self._pidrdm_set(pump["index"], 0x8038, bytes([0]))
         val=max(0,min(255,round(pct*255/100)))
         self._pidrdm_set(pump["index"], 0x8039, bytes([val]))
+        log.info("Manuelle Leistung %d%% -> Speed %d (SFC aus)", round(pct), val)
         return val
-
-    def set_power(self, pump, on):
-        # Ein/Aus ueber Pump_Mode 0x8038 (FcOnOff): 0 = aus, sonst letzter Modus
-        val=(self.last_mode or 1) if on else 0
-        self._pidrdm_set(pump["index"], 0x8038, bytes([val]))
-        log.info("Power %s -> PumpMode %d (0x8038)", "ON" if on else "OFF", val)
 
     def _pidrdm_set(self, table_index, pid, data):
         payload=struct.pack("<I",table_index)+struct.pack("<H",pid)+bytes([1])+bytes([len(data)])+data
@@ -320,7 +319,7 @@ import paho.mqtt.client as mqtt
 
 DISC="homeassistant"; NODE="oase_egc"
 AVAIL=f"{NODE}/availability"
-CMD_SPEED=f"{NODE}/speed/set"; CMD_POWER=f"{NODE}/power/set"
+CMD_SPEED=f"{NODE}/speed/set"; CMD_SFC=f"{NODE}/sfc/set"
 cmd_q=queue.Queue()
 
 def mqtt_connect():
@@ -328,7 +327,7 @@ def mqtt_connect():
     if MQTT_USER: c.username_pw_set(MQTT_USER, MQTT_PASS)
     c.will_set(AVAIL,"offline",retain=True)
     def on_connect(cl,u,f,rc,props=None):
-        cl.subscribe(CMD_SPEED); cl.subscribe(CMD_POWER); cl.publish(AVAIL,"online",retain=True)
+        cl.subscribe(CMD_SPEED); cl.subscribe(CMD_SFC); cl.publish(AVAIL,"online",retain=True)
         log.info("MQTT verbunden (%s:%s)", MQTT_HOST, MQTT_PORT)
     def on_msg(cl,u,m):
         cmd_q.put((m.topic, m.payload.decode(errors="replace")))
@@ -346,16 +345,18 @@ def publish_discovery(c, pump):
     cfg("sensor","el_temp",{"name":"Elektroniktemperatur","state_topic":f"{NODE}/el_temp","unit_of_measurement":"°C","device_class":"temperature","state_class":"measurement"})
     cfg("sensor","power_w",{"name":"Leistung","state_topic":f"{NODE}/power_w","unit_of_measurement":"W","device_class":"power","state_class":"measurement"})
     cfg("sensor","speed_setpoint",{"name":"Speed-Sollwert","state_topic":f"{NODE}/speed_raw","unit_of_measurement":"/255","icon":"mdi:speedometer"})
-    cfg("number","speed",{"name":"Leistung","command_topic":CMD_SPEED,"state_topic":f"{NODE}/speed_pct","min":0,"max":100,"step":1,"unit_of_measurement":"%","icon":"mdi:fan"})
-    cfg("switch","power",{"name":"Pumpe","command_topic":CMD_POWER,"state_topic":f"{NODE}/power_state","payload_on":"ON","payload_off":"OFF","icon":"mdi:water-pump"})
+    cfg("number","speed",{"name":"Manuelle Leistung","command_topic":CMD_SPEED,"state_topic":f"{NODE}/speed_pct","min":0,"max":100,"step":1,"unit_of_measurement":"%","icon":"mdi:fan"})
+    cfg("switch","sfc",{"name":"SFC-Automatik","command_topic":CMD_SFC,"state_topic":f"{NODE}/sfc","payload_on":"ON","payload_off":"OFF","icon":"mdi:thermostat"})
+    cfg("sensor","sfc_level",{"name":"SFC-Stufe","state_topic":f"{NODE}/sfc_level","state_class":"measurement","entity_category":"diagnostic","icon":"mdi:stairs"})
     cfg("binary_sensor","online",{"name":"Online","state_topic":f"{NODE}/online","payload_on":"ON","payload_off":"OFF","device_class":"connectivity","entity_category":"diagnostic"})
 
 def publish_state(c, st):
     for k,topic in (("rpm","rpm"),("water_temp","water_temp"),("el_temp","el_temp"),
-                    ("power_w","power_w"),("speed_raw","speed_raw"),("speed_pct","speed_pct")):
+                    ("power_w","power_w"),("speed_raw","speed_raw"),("speed_pct","speed_pct"),
+                    ("sfc_level","sfc_level")):
         if st.get(k) is not None: c.publish(f"{NODE}/{topic}", st[k])
-    if "on" in st:
-        c.publish(f"{NODE}/power_state", "ON" if st["on"] else "OFF")
+    if "sfc" in st:
+        c.publish(f"{NODE}/sfc", "ON" if st["sfc"] else "OFF")
     c.publish(f"{NODE}/online","ON")
 
 def run_bridge():
@@ -382,7 +383,7 @@ def run_bridge():
                         log.warning("Steuerung deaktiviert (enable_control=false) - ignoriere %s=%s",topic,val); continue
                     try:
                         if topic==CMD_SPEED: sess.set_speed_pct(pump, float(val))
-                        elif topic==CMD_POWER: sess.set_power(pump, val.strip().upper()=="ON")
+                        elif topic==CMD_SFC: sess.set_sfc(pump, val.strip().upper()=="ON")
                     except Exception as e: log.error("Steuerbefehl %s=%s: %s",topic,val,e)
                 st=sess.read_state(pump)
                 publish_state(mc, st)
