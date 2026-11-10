@@ -60,8 +60,6 @@ PT_PUMP,   PT_PUMP_R   = 0x5100, 0x51FF
 PT_RDM,    PT_RDM_R    = 0x7100, 0x71FF
 PT_PIDRDM, PT_PIDRDM_R = 0x5500, 0x55FF
 PT_FDISC,  PT_FDISC_R  = 0x1000, 0x10FF
-PT_SOPMODE,PT_SOPMODE_R= 0x5200, 0x52FF   # SetOperationMode = Power an/aus
-PT_GOPMODE,PT_GOPMODE_R= 0x5300, 0x53FF   # GetOperationMode
 RDM_SRC = bytes([0,0,0,0,0,1])
 
 def onet(pt, payload=b"", txn=0):
@@ -210,23 +208,18 @@ class OnetSession:
         except Exception as e: log.debug("sfc:%s",e)
         try: st["sfc_level"]=s16(self.rdm_get(m,d,0x0201,bytes([9])),1)
         except Exception as e: log.debug("sfclvl:%s",e)
-        pw=self.get_power(pump)
-        if pw is not None: st["on"]=pw
+        try:
+            pw=self.rdm_get(m,d,0x1010)
+            if pw is not None and len(pw)>=1: st["on"]=pw[0]==0xFF
+        except Exception as e: log.debug("power:%s",e)
         if st.get("power_w") is not None and st["power_w"]<0:
             st["power_w"]=0
         return st
 
     def set_power(self, pump, on):
-        pl=struct.pack("<I",pump["index"])+bytes([1 if on else 0])
-        self.request(PT_SOPMODE, pl, PT_SOPMODE_R)
-        log.info("Power %s (OperationMode)", "AN" if on else "AUS")
-
-    def get_power(self, pump):
-        try:
-            rep=self.request(PT_GOPMODE, struct.pack("<I",pump["index"]), PT_GOPMODE_R)
-            if rep and len(rep)>=5: return rep[4]!=0
-        except Exception as e: log.debug("getpower:%s",e)
-        return None
+        # Power = RDM OnOff 0x1010: 0xFF = an, 0x02 = Standby (aus)
+        self._pidrdm_set(pump["index"], 0x1010, bytes([0xFF if on else 0x02]))
+        log.info("Power %s (0x1010 <- %s)", "AN" if on else "AUS", "FF" if on else "02")
 
     def set_sfc(self, pump, on):
         self._pidrdm_set(pump["index"], 0x8038, bytes([1 if on else 0]))
