@@ -23,7 +23,11 @@ import os, sys, socket, ssl, struct, time, json, threading, queue, tempfile, sub
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 
 # ------------------------------------------------------------------ Konfig
-IP          = os.environ.get("CONTROLLER_IP", "172.17.30.5")
+IP_RAW      = os.environ.get("CONTROLLER_IP", "172.17.30.5")
+IP          = IP_RAW  # wird in connect() per DNS aufgeloest
+def resolve_host(h):
+    try: return socket.gethostbyname(h)
+    except Exception as e: log.debug("DNS %s: %s", h, e); return h
 KEY_FILE    = "/data/key.bin"
 def _resolve_key():
     env=os.environ.get("DEVICE_PASSWORD","")
@@ -56,6 +60,8 @@ PT_PUMP,   PT_PUMP_R   = 0x5100, 0x51FF
 PT_RDM,    PT_RDM_R    = 0x7100, 0x71FF
 PT_PIDRDM, PT_PIDRDM_R = 0x5500, 0x55FF
 PT_FDISC,  PT_FDISC_R  = 0x1000, 0x10FF
+PT_SOPMODE,PT_SOPMODE_R= 0x5200, 0x52FF   # SetOperationMode = Power an/aus
+PT_GOPMODE,PT_GOPMODE_R= 0x5300, 0x53FF   # GetOperationMode
 RDM_SRC = bytes([0,0,0,0,0,1])
 
 def onet(pt, payload=b"", txn=0):
@@ -124,6 +130,8 @@ class OnetSession:
                 except Exception as e: log.debug("trigger: %s", e)
                 stop.wait(3)
             u.close()
+        self.ip=resolve_host(IP_RAW)
+        if self.ip!=IP_RAW: log.info("Controller %s -> %s", IP_RAW, self.ip)
         th=threading.Thread(target=trig,daemon=True); th.start()
         try:
             raw,addr=self.lsock.accept()
@@ -202,9 +210,23 @@ class OnetSession:
         except Exception as e: log.debug("sfc:%s",e)
         try: st["sfc_level"]=s16(self.rdm_get(m,d,0x0201,bytes([9])),1)
         except Exception as e: log.debug("sfclvl:%s",e)
+        pw=self.get_power(pump)
+        if pw is not None: st["on"]=pw
         if st.get("power_w") is not None and st["power_w"]<0:
             st["power_w"]=0
         return st
+
+    def set_power(self, pump, on):
+        pl=struct.pack("<I",pump["index"])+bytes([1 if on else 0])
+        self.request(PT_SOPMODE, pl, PT_SOPMODE_R)
+        log.info("Power %s (OperationMode)", "AN" if on else "AUS")
+
+    def get_power(self, pump):
+        try:
+            rep=self.request(PT_GOPMODE, struct.pack("<I",pump["index"]), PT_GOPMODE_R)
+            if rep and len(rep)>=5: return rep[4]!=0
+        except Exception as e: log.debug("getpower:%s",e)
+        return None
 
     def set_sfc(self, pump, on):
         self._pidrdm_set(pump["index"], 0x8038, bytes([1 if on else 0]))
@@ -319,7 +341,7 @@ import paho.mqtt.client as mqtt
 
 DISC="homeassistant"; NODE="oase_egc"
 AVAIL=f"{NODE}/availability"
-CMD_SPEED=f"{NODE}/speed/set"; CMD_SFC=f"{NODE}/sfc/set"
+CMD_SPEED=f"{NODE}/speed/set"; CMD_SFC=f"{NODE}/sfc/set"; CMD_POWER=f"{NODE}/power/set"
 cmd_q=queue.Queue()
 
 def mqtt_connect():
@@ -327,7 +349,7 @@ def mqtt_connect():
     if MQTT_USER: c.username_pw_set(MQTT_USER, MQTT_PASS)
     c.will_set(AVAIL,"offline",retain=True)
     def on_connect(cl,u,f,rc,props=None):
-        cl.subscribe(CMD_SPEED); cl.subscribe(CMD_SFC); cl.publish(AVAIL,"online",retain=True)
+        cl.subscribe(CMD_SPEED); cl.subscribe(CMD_SFC); cl.subscribe(CMD_POWER); cl.publish(AVAIL,"online",retain=True)
         log.info("MQTT verbunden (%s:%s)", MQTT_HOST, MQTT_PORT)
     def on_msg(cl,u,m):
         cmd_q.put((m.topic, m.payload.decode(errors="replace")))
@@ -346,6 +368,7 @@ def publish_discovery(c, pump):
     cfg("sensor","power_w",{"name":"Leistung","state_topic":f"{NODE}/power_w","unit_of_measurement":"W","device_class":"power","state_class":"measurement"})
     cfg("sensor","speed_setpoint",{"name":"Speed-Sollwert","state_topic":f"{NODE}/speed_raw","unit_of_measurement":"/255","icon":"mdi:speedometer"})
     cfg("number","speed",{"name":"Manuelle Leistung","command_topic":CMD_SPEED,"state_topic":f"{NODE}/speed_pct","min":0,"max":100,"step":1,"unit_of_measurement":"%","icon":"mdi:fan"})
+    cfg("switch","power",{"name":"Pumpe","command_topic":CMD_POWER,"state_topic":f"{NODE}/power_state","payload_on":"ON","payload_off":"OFF","icon":"mdi:water-pump"})
     cfg("switch","sfc",{"name":"SFC-Automatik","command_topic":CMD_SFC,"state_topic":f"{NODE}/sfc","payload_on":"ON","payload_off":"OFF","icon":"mdi:thermostat"})
     cfg("sensor","sfc_level",{"name":"SFC-Stufe","state_topic":f"{NODE}/sfc_level","state_class":"measurement","entity_category":"diagnostic","icon":"mdi:stairs"})
     cfg("binary_sensor","online",{"name":"Online","state_topic":f"{NODE}/online","payload_on":"ON","payload_off":"OFF","device_class":"connectivity","entity_category":"diagnostic"})
@@ -357,6 +380,8 @@ def publish_state(c, st):
         if st.get(k) is not None: c.publish(f"{NODE}/{topic}", st[k])
     if "sfc" in st:
         c.publish(f"{NODE}/sfc", "ON" if st["sfc"] else "OFF")
+    if "on" in st:
+        c.publish(f"{NODE}/power_state", "ON" if st["on"] else "OFF")
     c.publish(f"{NODE}/online","ON")
 
 def run_bridge():
@@ -384,6 +409,7 @@ def run_bridge():
                     try:
                         if topic==CMD_SPEED: sess.set_speed_pct(pump, float(val))
                         elif topic==CMD_SFC: sess.set_sfc(pump, val.strip().upper()=="ON")
+                        elif topic==CMD_POWER: sess.set_power(pump, val.strip().upper()=="ON")
                     except Exception as e: log.error("Steuerbefehl %s=%s: %s",topic,val,e)
                 st=sess.read_state(pump)
                 publish_state(mc, st)

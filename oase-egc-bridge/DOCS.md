@@ -39,3 +39,22 @@ automatisch gespeicherten Key.
 - Der Controller **verbindet sich zurück** auf TCP 5999. Läuft das Add-on in einem
   anderen Netz als der Controller, braucht es eine Firewall-Allow-Regel
   `Controller → Add-on-Host:5999` (host_network ist aktiv).
+
+## Steuerung (ab 0.1.8)
+
+- **Pumpe (Power):** echter Ein/Aus-Schalter über den ONet-Betriebsmodus
+  (`SetOperationMode`), wirkt **modusunabhängig** – schaltet die Pumpe auch
+  aus laufender SFC-/Manuell-Regelung komplett ab.
+- **SFC-Automatik:** temperaturbasierte Automatik (Seasonal Flow Control) an/aus.
+- **Manuelle Leistung %:** feste Drehzahl; deaktiviert dazu automatisch SFC.
+
+## FAQ
+
+**Controller per Name?** `controller_ip` akzeptiert auch einen Hostnamen
+(z. B. `oase-egc.iot.lan`); er wird beim Verbinden per DNS aufgelöst.
+
+**Wird `device_password` benötigt?** Ja – es ist der Auth-Key, den der
+Controller bei `CheckDevicePassword` verlangt (im Router-Modus ein in der App
+erzeugter Zufalls-Key). Der Capture-Modus trägt ihn automatisch ein; du kannst
+ihn hier auch ändern oder leeren. Ohne gültigen Key schlagen Lese-/Schreib-
+zugriffe fehl. Ist das Feld leer, fällt das Add-on auf `/data/key.bin` zurück.
