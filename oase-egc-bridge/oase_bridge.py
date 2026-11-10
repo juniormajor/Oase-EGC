@@ -105,7 +105,7 @@ class OnetSession:
     """Haelt die vom Controller aufgebaute TLS-Verbindung und macht Request/Reply."""
     def __init__(self, ip, password):
         self.ip=ip; self.password=password; self.sock=None; self.lsock=None
-        self.txn=0; self._buf=b""; self._lock=threading.Lock(); self.last_speed=128
+        self.txn=0; self._buf=b""; self._lock=threading.Lock(); self.last_speed=128; self.last_mode=1
 
     def _nt(self):
         self.txn=(self.txn+1)&0xFF; return self.txn
@@ -194,11 +194,15 @@ class OnetSession:
             sp=self.rdm_get(m,d,0x8039)
             if sp: st["speed_raw"]=sp[0]; st["speed_pct"]=round(sp[0]*100/255)
         except Exception as e: log.debug("sp:%s",e)
-        # Ein/Aus aus dem Speed-Sollwert ableiten (0x1010 schaltet die Pumpe nicht)
-        if st.get("speed_raw") is not None:
-            st["on"]=st["speed_raw"]>0
-            if st["speed_raw"]>0: self.last_speed=st["speed_raw"]
-        elif st.get("rpm") is not None:
+        if st.get("speed_raw") and st["speed_raw"]>0: self.last_speed=st["speed_raw"]
+        # Ein/Aus aus Pump_Mode (0x8038 = FcOnOff): 0 = aus
+        try:
+            md=self.rdm_get(m,d,0x8038)
+            if md is not None and len(md)>=1:
+                st["mode"]=md[0]; st["on"]=md[0]!=0
+                if md[0]!=0: self.last_mode=md[0]
+        except Exception as e: log.debug("mode:%s",e)
+        if "on" not in st and st.get("rpm") is not None:
             st["on"]=st["rpm"]>50
         if st.get("power_w") is not None and st["power_w"]<0:
             st["power_w"]=0
@@ -210,10 +214,10 @@ class OnetSession:
         return val
 
     def set_power(self, pump, on):
-        # Pumpe ist controlViaRdm -> Ein/Aus ueber Speed (0x1010 schaltet sie nicht)
-        val=(self.last_speed or 128) if on else 0
-        self._pidrdm_set(pump["index"], 0x8039, bytes([max(0,min(255,val))]))
-        log.info("Power %s -> Speed %d", "ON" if on else "OFF", val)
+        # Ein/Aus ueber Pump_Mode 0x8038 (FcOnOff): 0 = aus, sonst letzter Modus
+        val=(self.last_mode or 1) if on else 0
+        self._pidrdm_set(pump["index"], 0x8038, bytes([val]))
+        log.info("Power %s -> PumpMode %d (0x8038)", "ON" if on else "OFF", val)
 
     def _pidrdm_set(self, table_index, pid, data):
         payload=struct.pack("<I",table_index)+struct.pack("<H",pid)+bytes([1])+bytes([len(data)])+data
