@@ -1,0 +1,32 @@
+name: OASE EGC Bridge
+version: "0.1.0"
+slug: oase_egc_bridge
+description: Lokale Anbindung der OASE EGC Teichpumpensteuerung (ONet) an Home Assistant via MQTT - ohne Cloud, ohne OASE-Konto.
+url: https://github.com/juniormajor/Oase-EGC
+arch:
+  - amd64
+  - aarch64
+  - armv7
+startup: application
+boot: manual
+init: false
+host_network: true
+hassio_api: true
+services:
+  - mqtt:need
+map:
+  - addon_config:rw
+options:
+  controller_ip: "172.17.30.5"
+  device_password: ""
+  poll_interval: 10
+  enable_control: false
+  mode: bridge
+  log_level: info
+schema:
+  controller_ip: str
+  device_password: password
+  poll_interval: int(2,3600)
+  enable_control: bool
+  mode: list(bridge|capture)?
+  log_level: list(debug|info|warning|error)?
