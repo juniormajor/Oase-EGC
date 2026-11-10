@@ -83,14 +83,20 @@ def make_server_ctx():
                     "-days","3650","-nodes","-subj","/CN=com.oase.easycontrol"],
                    check=True, capture_output=True)
     ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(c,k)
-    try: ctx.minimum_version=ssl.TLSVersion.TLSv1_2
+    try: ctx.minimum_version=ssl.TLSVersion.TLSv1
     except Exception: pass
+    for cs in ("DEFAULT:@SECLEVEL=0","ALL:@SECLEVEL=0"):
+        try: ctx.set_ciphers(cs); break
+        except Exception: pass
     return ctx
 
 def make_client_ctx():
     ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE
-    try: ctx.minimum_version=ssl.TLSVersion.TLSv1_2
+    try: ctx.minimum_version=ssl.TLSVersion.TLSv1
     except Exception: pass
+    for cs in ("DEFAULT:@SECLEVEL=0","ALL:@SECLEVEL=0"):
+        try: ctx.set_ciphers(cs); break
+        except Exception: pass
     return ctx
 
 # ------------------------------------------------------------------ ONet-Session

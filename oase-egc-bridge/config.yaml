@@ -1,5 +1,5 @@
 name: OASE EGC Bridge
-version: "0.1.3"
+version: "0.1.4"
 slug: oase_egc_bridge
 description: Lokale Anbindung der OASE EGC Teichpumpensteuerung (ONet) an Home Assistant via MQTT - ohne Cloud, ohne OASE-Konto.
 url: https://github.com/juniormajor/Oase-EGC
