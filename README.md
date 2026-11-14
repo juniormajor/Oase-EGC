@@ -14,12 +14,6 @@ Or manually: **Settings → Add-ons → Add-on Store → ⋮ → Repositories**,
 
 Configuration and usage: see [oase-egc-bridge/DOCS.md](oase-egc-bridge/DOCS.md).
 
-## Deutsch
-
-Lokale Anbindung der OASE-EGC-Teichpumpensteuerung an Home Assistant ohne
-Cloud und ohne OASE-Konto. Installation wie oben; die Dokumentation steht auf
-Englisch in [DOCS.md](oase-egc-bridge/DOCS.md).
-
 ## License
 
 MIT – see [LICENSE](LICENSE). Not affiliated with or endorsed by OASE GmbH.

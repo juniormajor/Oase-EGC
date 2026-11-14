@@ -19,7 +19,7 @@ to Home Assistant **locally** – no OASE cloud, no OASE account.
    **automatically to `bridge`** and restarts – no manual copying.
    Firewall: the add-on host must be able to reach the phone.
 2. From then on the add-on runs as a bridge. The pump appears via MQTT discovery
-   as the device "OASE EGC Teichpumpe" with sensors (speed, water temperature,
+   as the device "OASE EGC Pond Pump" with sensors (speed, water temperature,
    power) and – with `enable_control: true` – power (`number`) and on/off
    (`switch`).
 

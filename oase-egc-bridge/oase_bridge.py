@@ -1,30 +1,28 @@
 #!/usr/bin/env python3
 """
-OASE EGC Bridge - Home Assistant Add-on
-Lokale ONet-Anbindung der OASE EGC Teichpumpensteuerung an HA via MQTT.
+OASE EGC Bridge - Home Assistant add-on
+Local ONet connection of the OASE EGC pond pump controller to Home Assistant via MQTT.
 
-Zwei Betriebsarten (Option `mode`):
-  - bridge  : verbindet sich zum Controller, pollt Zustand/Sensoren und
-              veroeffentlicht sie per MQTT-Discovery; nimmt Steuerbefehle
-              (Speed, Ein/Aus) aus HA entgegen (nur wenn enable_control=true).
-  - capture : gibt sich einmalig als Controller gegenueber der OASE-App aus
-              und liest das Geraetepasswort mit; schreibt es nach
-              /data/captured_key.txt und ins Log. Danach den Key in die
-              Add-on-Optionen (device_password) uebernehmen und auf `bridge`
-              zurueckstellen.
+Two operating modes (option `mode`):
+  - bridge  : connects to the controller, polls state and sensors and
+              publishes them via MQTT discovery; accepts control commands
+              (speed, on/off) from HA (only if enable_control=true).
+  - capture : poses once as the controller towards the OASE app and records
+              the device password; stores it in /data/key.bin, switches the
+              mode back to `bridge` and restarts the add-on.
 
-Die Bridge haelt eine EIGENE Verbindung zum Controller. Die OASE-App bleibt
-parallel nutzbar (der Controller erlaubt mehrere Clients); es wird kein
-Exklusivmodus gesetzt, damit App und ggf. Firmware-Updates weiter funktionieren.
+The bridge keeps its OWN connection to the controller. The OASE app remains
+usable in parallel (the controller accepts several clients); no exclusive mode
+is set, so the app and firmware updates keep working.
 
-Protokollgrundlage: App-Dekompilat OASE Control 5.2.0 (siehe Repo infra, D04).
+Protocol basis: decompiled OASE Control app 5.2.0.
 """
 import os, sys, socket, ssl, struct, time, json, threading, queue, tempfile, subprocess, signal, logging, urllib.request, warnings
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 
-# ------------------------------------------------------------------ Konfig
+# ------------------------------------------------------------------ Config
 IP_RAW      = os.environ.get("CONTROLLER_IP", "172.17.30.5")
-IP          = IP_RAW  # wird in connect() per DNS aufgeloest
+IP          = IP_RAW  # resolved via DNS in connect()
 def resolve_host(h):
     try: return socket.gethostbyname(h)
     except Exception as e: log.debug("DNS %s: %s", h, e); return h
@@ -83,9 +81,9 @@ def s16(b, off=0):
     return struct.unpack(">h", b[off:off+2])[0] if len(b)>=off+2 else None
 
 def make_server_ctx():
-    # Frisches Cert pro Connect mit der AKTUELLEN Uhr. Gueltigkeit < Jahr 2050,
-    # damit notAfter als UTCTime kodiert wird (GeneralizedTime ab 2050 versteht
-    # der Embedded-TLS-Stack des Controllers nicht -> meldet faelschlich expired).
+    # Fresh certificate per connect using the CURRENT clock. Validity ends before
+    # 2050 so notAfter is encoded as UTCTime (the controller's embedded TLS stack
+    # does not understand GeneralizedTime from 2050 on and reports "expired").
     d=tempfile.mkdtemp(); c=os.path.join(d,"c.pem"); k=os.path.join(d,"k.pem")
     subprocess.run(["openssl","req","-x509","-newkey","rsa:2048","-keyout",k,"-out",c,
                     "-days","3650","-nodes","-subj","/CN=com.oase.easycontrol"],
@@ -109,7 +107,7 @@ def make_client_ctx():
 
 # ------------------------------------------------------------------ ONet-Session
 class OnetSession:
-    """Haelt die vom Controller aufgebaute TLS-Verbindung und macht Request/Reply."""
+    """Holds the TLS connection opened by the controller and performs request/reply."""
     def __init__(self, ip, password):
         self.ip=ip; self.password=password; self.sock=None; self.lsock=None
         self.txn=0; self._buf=b""; self._lock=threading.Lock(); self.last_speed=128; self.last_mode=1
@@ -138,19 +136,19 @@ class OnetSession:
             raw,addr=self.lsock.accept()
         except socket.timeout:
             stop.set(); self.lsock.close()
-            raise TimeoutError("Controller hat nicht zurueckverbunden (Firewall/IP pruefen)")
+            raise TimeoutError("Controller did not connect back (check firewall/IP)")
         stop.set()
-        log.info("Controller verbunden von %s", addr[0])
+        log.info("Controller connected from %s", addr[0])
         self.sock=make_server_ctx().wrap_socket(raw, server_side=True); self.sock.settimeout(8)
         self._buf=b""
         self.request(PT_ALIVE, b"", PT_ALIVE_R)
         if self.password:
             rep=self.request(PT_PW, self.password[:64].ljust(64,b"\x00"), PT_PW_R)
             if not (rep and rep[0]==1):
-                raise PermissionError("CheckDevicePassword INCORRECT - device_password pruefen")
-            log.info("Authentifiziert (CheckDevicePassword Correct)")
+                raise PermissionError("CheckDevicePassword INCORRECT - check device_password")
+            log.info("Authenticated (CheckDevicePassword correct)")
         else:
-            log.warning("Kein device_password gesetzt - Reads/Writes werden scheitern")
+            log.warning("No device_password set - reads/writes will fail")
 
     def request(self, pt, payload, want, timeout=8):
         with self._lock:
@@ -165,16 +163,16 @@ class OnetSession:
                     if rpt==want: return rpl
                 try: chunk=self.sock.recv(4096)
                 except socket.timeout: break
-                if not chunk: raise ConnectionError("Verbindung geschlossen")
+                if not chunk: raise ConnectionError("Connection closed")
                 self._buf+=chunk
-            raise TimeoutError(f"keine Antwort 0x{want:04X}")
+            raise TimeoutError(f"no reply 0x{want:04X}")
 
     def close(self):
         for s in (self.sock,self.lsock):
             try: s.close()
             except Exception: pass
 
-    # --- Fachfunktionen -------------------------------------------------
+    # --- Pump functions -------------------------------------------------
     def find_pump(self):
         for idx in range(8):
             rep=self.request(PT_DEVTAB, struct.pack("<I",idx)+struct.pack("<H",0), PT_DEVTAB_R)
@@ -204,7 +202,7 @@ class OnetSession:
             if sp: st["speed_raw"]=sp[0]; st["speed_pct"]=round(sp[0]*100/255)
         except Exception as e: log.debug("sp:%s",e)
         if st.get("speed_raw") and st["speed_raw"]>0: self.last_speed=st["speed_raw"]
-        # SFC-Automatik (0x8038): 0 = aus (manuell), sonst an
+        # SFC automatic (0x8038): 0 = off (manual), otherwise on
         try:
             md=self.rdm_get(m,d,0x8038)
             if md is not None and len(md)>=1: st["sfc"]=md[0]!=0
@@ -222,20 +220,20 @@ class OnetSession:
         return st
 
     def set_power(self, pump, on):
-        # Power = RDM OnOff 0x1010: 0xFF = an, 0x02 = Standby (aus)
+        # Power = RDM OnOff 0x1010: 0xFF = on, 0x02 = standby (off)
         self._pidrdm_set(pump["index"], 0x1010, bytes([0xFF if on else 0x02]))
-        log.info("Power %s (0x1010 <- %s)", "AN" if on else "AUS", "FF" if on else "02")
+        log.info("Power %s (0x1010 <- %s)", "ON" if on else "OFF", "FF" if on else "02")
 
     def set_sfc(self, pump, on):
         self._pidrdm_set(pump["index"], 0x8038, bytes([1 if on else 0]))
-        log.info("SFC-Automatik %s", "AN" if on else "AUS")
+        log.info("SFC automatic %s", "ON" if on else "OFF")
 
     def set_speed_pct(self, pump, pct):
-        # Manueller Speed wirkt nur ohne SFC -> erst SFC aus, dann 0x8039 setzen
+        # Manual speed only applies without SFC -> switch SFC off first, then set 0x8039
         self._pidrdm_set(pump["index"], 0x8038, bytes([0]))
         val=max(0,min(255,round(pct*255/100)))
         self._pidrdm_set(pump["index"], 0x8039, bytes([val]))
-        log.info("Manuelle Leistung %d%% -> Speed %d (SFC aus)", round(pct), val)
+        log.info("Manual power %d%% -> speed %d (SFC off)", round(pct), val)
         return val
 
     def _pidrdm_set(self, table_index, pid, data):
@@ -246,7 +244,7 @@ class OnetSession:
 # ------------------------------------------------------------------ Capture
 def run_capture():
     import ssl as _ssl
-    log.info("Capture-Modus: lerne Controller-Kennung von %s ...", IP)
+    log.info("Capture mode: learning controller identity from %s ...", IP)
     s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1)
     s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
     try: s.bind(("",PORT_UDP))
@@ -262,8 +260,8 @@ def run_capture():
         except socket.timeout: pass
     s.close()
     if not reply:
-        log.error("Keine DiscoveryReply vom Controller - an/erreichbar?"); return
-    log.info("Kennung gelernt. Oeffne jetzt die OASE-App auf dem Handy (ggf. Controller kurz stromlos).")
+        log.error("No DiscoveryReply from controller - powered on and reachable?"); return
+    log.info("Identity learned. Now open the OASE app on the phone (power-cycle the controller if needed).")
     captured={"done":False}
     def play(phone,port):
         try:
@@ -280,7 +278,7 @@ def run_capture():
                     if pt==PT_ALIVE: c.sendall(onet(PT_ALIVE_R,b"",txn))
                     elif pt==PT_PW:
                         pwb=pl[:64].split(b"\x00")[0]
-                        log.warning("KEY ABGEFANGEN (%d B)", len(pwb))
+                        log.warning("KEY CAPTURED (%d B)", len(pwb))
                         c.sendall(onet(PT_PW_R,bytes([1]),txn))
                         captured["key"]=pwb; captured["done"]=True; return
             c.close()
@@ -288,7 +286,7 @@ def run_capture():
     us=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); us.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1)
     us.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
     try: us.bind(("",PORT_UDP))
-    except OSError as e: log.error("UDP 5959 belegt: %s", e); return
+    except OSError as e: log.error("UDP 5959 in use: %s", e); return
     us.settimeout(1); end=time.time()+300
     while time.time()<end and not captured["done"]:
         try: d,addr=us.recvfrom(2048)
@@ -300,39 +298,39 @@ def run_capture():
         if pt==PT_FDISC: us.sendto(onet(PT_FDISC_R,reply,txn),addr)
         elif pt==PT_REQTCP and len(pl)>=3:
             port=struct.unpack("<H",pl[1:3])[0]
-            log.info("RequestTcpConnection vom Handy %s (Port %d)", addr[0], port)
+            log.info("RequestTcpConnection from phone %s (port %d)", addr[0], port)
             threading.Thread(target=play,args=(addr[0],port),daemon=True).start()
     if captured.get("key"):
         adopt_key_and_switch_to_bridge(captured["key"])
     else:
-        log.error("Nichts abgefangen. Firewall (Add-on-Host -> Handy) und App-Oeffnen pruefen.")
+        log.error("Nothing captured. Check firewall (add-on host -> phone) and that the app was opened.")
 
-# ------------------------------------------------------------------ Supervisor-API
+# ------------------------------------------------------------------ Supervisor API
 def _sup(method, path, body=None):
     tok=os.environ.get("SUPERVISOR_TOKEN","")
-    if not tok: raise RuntimeError("kein SUPERVISOR_TOKEN (hassio_api aktiv?)")
+    if not tok: raise RuntimeError("no SUPERVISOR_TOKEN (hassio_api enabled?)")
     req=urllib.request.Request("http://supervisor"+path, method=method,
         headers={"Authorization":f"Bearer {tok}","Content-Type":"application/json"},
         data=json.dumps(body).encode() if body is not None else None)
     with urllib.request.urlopen(req, timeout=15) as r: return r.read()
 
 def adopt_key_and_switch_to_bridge(pwb):
-    """Key persistent speichern, Modus automatisch auf bridge, Add-on neu starten."""
+    """Store the key persistently, switch mode to bridge, restart the add-on."""
     try:
         with open(KEY_FILE,"wb") as f: f.write(pwb)
-        log.warning("Key uebernommen -> %s (%d B)", KEY_FILE, len(pwb))
+        log.warning("Key stored -> %s (%d B)", KEY_FILE, len(pwb))
     except Exception as e:
-        log.error("Key speichern fehlgeschlagen: %s", e); return
+        log.error("Storing key failed: %s", e); return
     try:
         opts={}
         try: opts=json.load(open("/data/options.json"))
         except Exception: pass
         opts["mode"]="bridge"
         _sup("POST","/addons/self/options", {"options":opts})
-        log.warning("Modus automatisch auf 'bridge' gesetzt. Starte Add-on neu ...")
+        log.warning("Mode set to 'bridge' automatically. Restarting add-on ...")
         _sup("POST","/addons/self/restart")
     except Exception as e:
-        log.error("Auto-Uebernahme via Supervisor fehlgeschlagen (%s). Key liegt in %s, Modus manuell auf bridge stellen.", e, KEY_FILE)
+        log.error("Automatic switch via Supervisor failed (%s). Key is in %s, set mode to bridge manually.", e, KEY_FILE)
 
 # ------------------------------------------------------------------ MQTT-Bridge
 import paho.mqtt.client as mqtt
@@ -348,27 +346,27 @@ def mqtt_connect():
     c.will_set(AVAIL,"offline",retain=True)
     def on_connect(cl,u,f,rc,props=None):
         cl.subscribe(CMD_SPEED); cl.subscribe(CMD_SFC); cl.subscribe(CMD_POWER); cl.publish(AVAIL,"online",retain=True)
-        log.info("MQTT verbunden (%s:%s)", MQTT_HOST, MQTT_PORT)
+        log.info("MQTT connected (%s:%s)", MQTT_HOST, MQTT_PORT)
     def on_msg(cl,u,m):
         cmd_q.put((m.topic, m.payload.decode(errors="replace")))
     c.on_connect=on_connect; c.on_message=on_msg
     c.connect(MQTT_HOST, MQTT_PORT, 60); c.loop_start(); return c
 
 def publish_discovery(c, pump):
-    dev={"identifiers":[f"oase_egc_{pump['dev']:08x}"],"name":"OASE EGC Teichpumpe",
-         "manufacturer":"OASE","model":f"AquaMax Eco Expert (Art {pump['article']})"}
+    dev={"identifiers":[f"oase_egc_{pump['dev']:08x}"],"name":"OASE EGC Pond Pump",
+         "manufacturer":"OASE","model":f"AquaMax Eco Expert (article {pump['article']})"}
     def cfg(comp,obj,payload):
         payload.update({"availability_topic":AVAIL,"device":dev,"unique_id":f"{NODE}_{obj}"})
         c.publish(f"{DISC}/{comp}/{NODE}/{obj}/config", json.dumps(payload), retain=True)
-    cfg("sensor","rpm",{"name":"Drehzahl","state_topic":f"{NODE}/rpm","unit_of_measurement":"rpm","icon":"mdi:fan","state_class":"measurement"})
-    cfg("sensor","water_temp",{"name":"Wassertemperatur","state_topic":f"{NODE}/water_temp","unit_of_measurement":"°C","device_class":"temperature","state_class":"measurement"})
-    cfg("sensor","el_temp",{"name":"Elektroniktemperatur","state_topic":f"{NODE}/el_temp","unit_of_measurement":"°C","device_class":"temperature","state_class":"measurement"})
-    cfg("sensor","power_w",{"name":"Leistung","state_topic":f"{NODE}/power_w","unit_of_measurement":"W","device_class":"power","state_class":"measurement"})
-    cfg("sensor","speed_setpoint",{"name":"Speed-Sollwert","state_topic":f"{NODE}/speed_raw","unit_of_measurement":"/255","icon":"mdi:speedometer"})
-    cfg("number","speed",{"name":"Manuelle Leistung","command_topic":CMD_SPEED,"state_topic":f"{NODE}/speed_pct","min":0,"max":100,"step":1,"unit_of_measurement":"%","icon":"mdi:fan"})
-    cfg("switch","power",{"name":"Pumpe","command_topic":CMD_POWER,"state_topic":f"{NODE}/power_state","payload_on":"ON","payload_off":"OFF","icon":"mdi:water-pump"})
-    cfg("switch","sfc",{"name":"SFC-Automatik","command_topic":CMD_SFC,"state_topic":f"{NODE}/sfc","payload_on":"ON","payload_off":"OFF","icon":"mdi:thermostat"})
-    cfg("sensor","sfc_level",{"name":"SFC-Stufe","state_topic":f"{NODE}/sfc_level","device_class":"enum","options":["Max","Med","Min"],"entity_category":"diagnostic","icon":"mdi:stairs"})
+    cfg("sensor","rpm",{"name":"Speed","state_topic":f"{NODE}/rpm","unit_of_measurement":"rpm","icon":"mdi:fan","state_class":"measurement"})
+    cfg("sensor","water_temp",{"name":"Water temperature","state_topic":f"{NODE}/water_temp","unit_of_measurement":"°C","device_class":"temperature","state_class":"measurement"})
+    cfg("sensor","el_temp",{"name":"Electronics temperature","state_topic":f"{NODE}/el_temp","unit_of_measurement":"°C","device_class":"temperature","state_class":"measurement"})
+    cfg("sensor","power_w",{"name":"Power consumption","state_topic":f"{NODE}/power_w","unit_of_measurement":"W","device_class":"power","state_class":"measurement"})
+    cfg("sensor","speed_setpoint",{"name":"Speed setpoint","state_topic":f"{NODE}/speed_raw","unit_of_measurement":"/255","icon":"mdi:speedometer"})
+    cfg("number","speed",{"name":"Manual power","command_topic":CMD_SPEED,"state_topic":f"{NODE}/speed_pct","min":0,"max":100,"step":1,"unit_of_measurement":"%","icon":"mdi:fan"})
+    cfg("switch","power",{"name":"Pump","command_topic":CMD_POWER,"state_topic":f"{NODE}/power_state","payload_on":"ON","payload_off":"OFF","icon":"mdi:water-pump"})
+    cfg("switch","sfc",{"name":"SFC automatic","command_topic":CMD_SFC,"state_topic":f"{NODE}/sfc","payload_on":"ON","payload_off":"OFF","icon":"mdi:thermostat"})
+    cfg("sensor","sfc_level",{"name":"SFC level","state_topic":f"{NODE}/sfc_level","device_class":"enum","options":["Max","Med","Min"],"entity_category":"diagnostic","icon":"mdi:stairs"})
     cfg("binary_sensor","online",{"name":"Online","state_topic":f"{NODE}/online","payload_on":"ON","payload_off":"OFF","device_class":"connectivity","entity_category":"diagnostic"})
 
 def publish_state(c, st):
@@ -384,8 +382,8 @@ def publish_state(c, st):
 
 def run_bridge():
     if not MQTT_HOST:
-        log.error("Kein MQTT-Broker konfiguriert. Setze in den Add-on-Optionen "
-                  "mqtt_host (Name oder IP), mqtt_port, mqtt_user, mqtt_pass. Warte 30s ...")
+        log.error("No MQTT broker configured. Set in the add-on options "
+                  "mqtt_host (name or IP), mqtt_port, mqtt_user, mqtt_pass. Waiting 30 s ...")
         time.sleep(30); return
     mc=mqtt_connect()
     while True:
@@ -394,27 +392,27 @@ def run_bridge():
             sess.connect(wait=30)
             pump=sess.find_pump()
             if not pump:
-                log.error("Keine Pumpe in der Geraetetabelle gefunden."); sess.close(); time.sleep(10); continue
-            log.info("Pumpe: Art %s UID %04X:%08X DMX %d (Index %d)",
+                log.error("No pump found in the device table."); sess.close(); time.sleep(10); continue
+            log.info("Pump: article %s UID %04X:%08X DMX %d (index %d)",
                      pump["article"],pump["manu"],pump["dev"],pump["dmx"],pump["index"])
             publish_discovery(mc, pump)
             while True:
-                # Steuerbefehle abarbeiten (serialisiert mit dem Poll)
+                # Process control commands (serialised with polling)
                 while not cmd_q.empty():
                     topic,val=cmd_q.get()
                     if not ENABLE_CTRL:
-                        log.warning("Steuerung deaktiviert (enable_control=false) - ignoriere %s=%s",topic,val); continue
+                        log.warning("Control disabled (enable_control=false) - ignoring %s=%s",topic,val); continue
                     try:
                         if topic==CMD_SPEED: sess.set_speed_pct(pump, float(val))
                         elif topic==CMD_SFC: sess.set_sfc(pump, val.strip().upper()=="ON")
                         elif topic==CMD_POWER: sess.set_power(pump, val.strip().upper()=="ON")
-                    except Exception as e: log.error("Steuerbefehl %s=%s: %s",topic,val,e)
+                    except Exception as e: log.error("Control command %s=%s: %s",topic,val,e)
                 st=sess.read_state(pump)
                 publish_state(mc, st)
                 log.debug("state=%s", st)
                 time.sleep(max(2,POLL))
         except Exception as e:
-            log.warning("Session-Fehler: %s - neu aufbauen in 10s", e)
+            log.warning("Session error: %s - reconnecting in 10 s", e)
             try: mc.publish(f"{NODE}/online","OFF")
             except Exception: pass
             sess.close(); time.sleep(10)
@@ -424,7 +422,7 @@ def wait_for_clock(max_wait=60):
     import datetime as _dt
     waited=0
     while _dt.datetime.now().year < 2024 and waited < max_wait:
-        log.warning("Systemuhr noch nicht synchron (%s) - warte auf NTP", _dt.datetime.now())
+        log.warning("System clock not yet synchronised (%s) - waiting for NTP", _dt.datetime.now())
         time.sleep(3); waited+=3
 
 def main():

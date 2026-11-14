@@ -11,15 +11,15 @@ if bashio::config.has_value 'mqtt_host'; then
   export MQTT_PORT="$(bashio::config 'mqtt_port')"
   export MQTT_USER="$(bashio::config 'mqtt_user')"
   export MQTT_PASS="$(bashio::config 'mqtt_pass')"
-  bashio::log.info "MQTT aus Add-on-Optionen: ${MQTT_HOST}:${MQTT_PORT}"
+  bashio::log.info "MQTT from add-on options: ${MQTT_HOST}:${MQTT_PORT}"
 elif bashio::services.available 'mqtt'; then
   export MQTT_HOST="$(bashio::services 'mqtt' 'host')"
   export MQTT_PORT="$(bashio::services 'mqtt' 'port')"
   export MQTT_USER="$(bashio::services 'mqtt' 'username')"
   export MQTT_PASS="$(bashio::services 'mqtt' 'password')"
-  bashio::log.info "MQTT aus Supervisor-Service: ${MQTT_HOST}:${MQTT_PORT}"
+  bashio::log.info "MQTT from Supervisor service: ${MQTT_HOST}:${MQTT_PORT}"
 else
-  bashio::log.warning "Kein MQTT konfiguriert (weder Optionen noch Supervisor-Service)."
+  bashio::log.warning "No MQTT configured (neither options nor Supervisor service)."
 fi
 
 exec python3 /app/oase_bridge.py
