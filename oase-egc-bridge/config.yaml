@@ -7,7 +7,6 @@ arch:
   - amd64
   - aarch64
   - armv7
-startup: application
 boot: manual
 init: false
 host_network: true
