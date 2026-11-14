@@ -1,60 +1,72 @@
 # OASE EGC Bridge – Home Assistant Add-on
 
-Bindet die OASE EGC Teichpumpensteuerung (AquaMax Eco Expert, ONet-Protokoll)
-**lokal** in Home Assistant ein – ohne OASE-Cloud, ohne OASE-Konto. Reverse
-Engineering und Protokolldoku: siehe Repo `infra`, Bereich D04.
+Connects the OASE EGC pond pump controller (AquaMax Eco Expert, ONet protocol)
+to Home Assistant **locally** – no OASE cloud, no OASE account.
 
 ## Installation
-1. In HA: **Einstellungen → Add-ons → Add-on-Store → ⋮ → Repositories**
-   und die URL dieses GitHub-Repos hinzufügen.
-2. Add-on **OASE EGC Bridge** installieren.
-3. MQTT-Integration in HA aktiv (Mosquitto-Broker-Add-on genügt).
 
-## Schnellstart
-1. **Key beschaffen** (einmalig): Option `mode: capture` setzen, starten,
-   OASE-App am Handy öffnen. Das Add-on fängt den Key ab, **speichert ihn selbst**
-   (persistent in `/data/key.bin`), stellt den Modus **automatisch auf `bridge`**
-   und startet sich neu – kein manuelles Kopieren.
-   Firewall: der Add-on-Host muss das Handy erreichen (wie der bisherige Testhost).
-2. Danach läuft das Add-on als Bridge. Die Pumpe erscheint via MQTT-Discovery als
-   Gerät „OASE EGC Teichpumpe" mit Sensoren (Drehzahl, Wassertemperatur, Leistung)
-   und – wenn `enable_control: true` – Leistung (`number`) und Ein/Aus (`switch`).
+1. In Home Assistant: **Settings → Add-ons → Add-on Store → ⋮ → Repositories**,
+   add the URL of this GitHub repository.
+2. Install the add-on **OASE EGC Bridge**.
+3. The MQTT integration must be active in Home Assistant (the Mosquitto broker
+   add-on is sufficient).
 
-**Key ändern:** erneut `mode: capture` laufen lassen (überschreibt automatisch),
-oder `device_password` in den Optionen setzen – die Option hat Vorrang vor dem
-automatisch gespeicherten Key.
+## Quick start
 
-## Optionen
-| Option | Bedeutung |
+1. **Obtain the key** (once): set the option `mode: capture`, start the add-on
+   and open the OASE app on your phone. The add-on intercepts the key, **stores
+   it itself** (persistently in `/data/key.bin`), switches the mode
+   **automatically to `bridge`** and restarts – no manual copying.
+   Firewall: the add-on host must be able to reach the phone.
+2. From then on the add-on runs as a bridge. The pump appears via MQTT discovery
+   as the device "OASE EGC Teichpumpe" with sensors (speed, water temperature,
+   power) and – with `enable_control: true` – power (`number`) and on/off
+   (`switch`).
+
+**Changing the key:** run `mode: capture` again (overwrites automatically), or
+set `device_password` in the options – the option takes precedence over the
+automatically stored key.
+
+## Options
+
+| Option | Meaning |
 |---|---|
-| `controller_ip` | IP des EGC Controllers (z. B. 172.17.30.5) |
-| `device_password` | Optionaler Geräte-Key (Vorrang); leer = automatisch abgefangener Key aus dem Capture |
-| `poll_interval` | Abfrageintervall in Sekunden |
-| `enable_control` | Schreiben (Leistung/Ein-Aus) freigeben |
-| `mode` | `bridge` (Normalbetrieb) oder `capture` (Key abfangen) |
+| `controller_ip` | IP address or host name of the EGC controller |
+| `device_password` | Optional device key (takes precedence); empty = key intercepted in capture mode |
+| `poll_interval` | Polling interval in seconds |
+| `enable_control` | Allow writing (power, on/off) |
+| `mode` | `bridge` (normal operation) or `capture` (intercept key) |
+| `mqtt_host`, `mqtt_port`, `mqtt_user`, `mqtt_pass` | Optional; empty = MQTT service provided by the Supervisor |
+| `log_level` | `debug`, `info`, `warning` or `error` |
 
-## Hinweise
-- Die Bridge hält eine **eigene** Verbindung; die OASE-App und Firmware-Updates
-  des Controllers bleiben parallel möglich (kein Exklusivmodus).
-- Der Controller **verbindet sich zurück** auf TCP 5999. Läuft das Add-on in einem
-  anderen Netz als der Controller, braucht es eine Firewall-Allow-Regel
-  `Controller → Add-on-Host:5999` (host_network ist aktiv).
+## Notes
 
-## Steuerung (ab 0.1.8)
+- The bridge keeps its **own** connection; the OASE app and controller firmware
+  updates keep working in parallel (no exclusive mode).
+- The controller **connects back** on TCP 5999. If the add-on runs in a
+  different network than the controller, a firewall rule
+  `controller → add-on host:5999` is required (`host_network` is enabled).
 
-- **Pumpe (Power):** echter Ein/Aus-Schalter über den ONet-Betriebsmodus
-  (`SetOperationMode`), wirkt **modusunabhängig** – schaltet die Pumpe auch
-  aus laufender SFC-/Manuell-Regelung komplett ab.
-- **SFC-Automatik:** temperaturbasierte Automatik (Seasonal Flow Control) an/aus.
-- **Manuelle Leistung %:** feste Drehzahl; deaktiviert dazu automatisch SFC.
+## Control (since 0.1.8)
+
+- **Pump (power):** real on/off switch via the ONet operation mode
+  (`SetOperationMode`); works **regardless of mode** and switches the pump off
+  completely, even from running SFC or manual control.
+- **SFC automatic:** temperature-based automatic (Seasonal Flow Control) on/off.
+- **Manual power %:** fixed speed; disables SFC automatically.
 
 ## FAQ
 
-**Controller per Name?** `controller_ip` akzeptiert auch einen Hostnamen
-(z. B. `oase-egc.iot.lan`); er wird beim Verbinden per DNS aufgelöst.
+**Controller by name?** `controller_ip` also accepts a host name
+(e.g. `oase-egc.iot.lan`); it is resolved via DNS when connecting.
 
-**Wird `device_password` benötigt?** Ja – es ist der Auth-Key, den der
-Controller bei `CheckDevicePassword` verlangt (im Router-Modus ein in der App
-erzeugter Zufalls-Key). Der Capture-Modus trägt ihn automatisch ein; du kannst
-ihn hier auch ändern oder leeren. Ohne gültigen Key schlagen Lese-/Schreib-
-zugriffe fehl. Ist das Feld leer, fällt das Add-on auf `/data/key.bin` zurück.
+**Is `device_password` required?** Yes – it is the auth key the controller asks
+for in `CheckDevicePassword` (in router mode a random key generated by the app).
+Capture mode fills it in automatically; you can also change or clear it here.
+Without a valid key, reads and writes fail. If the field is empty, the add-on
+falls back to `/data/key.bin`.
+
+## Disclaimer
+
+Not affiliated with or endorsed by OASE GmbH. The protocol was analysed from own
+captures for local, private use.

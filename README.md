@@ -1,41 +1,25 @@
-# OASE EGC Bridge – Home Assistant Add-on
+# OASE EGC Bridge – Home Assistant Add-on repository
 
-Bindet die OASE EGC Teichpumpensteuerung (AquaMax Eco Expert, ONet-Protokoll)
-**lokal** in Home Assistant ein – ohne OASE-Cloud, ohne OASE-Konto. Reverse
-Engineering und Protokolldoku: siehe Repo `infra`, Bereich D04.
+Local Home Assistant add-on for the OASE EGC pond pump controller
+(AquaMax Eco Expert, ONet protocol) – no OASE cloud, no OASE account.
+Pump state, speed, water and electronics temperature, power, SFC automatic and
+manual power are exposed via MQTT discovery.
 
 ## Installation
-1. In HA: **Einstellungen → Add-ons → Add-on-Store → ⋮ → Repositories**
-   und die URL dieses GitHub-Repos hinzufügen.
-2. Add-on **OASE EGC Bridge** installieren.
-3. MQTT-Integration in HA aktiv (Mosquitto-Broker-Add-on genügt).
 
-## Schnellstart
-1. **Key beschaffen** (einmalig): Option `mode: capture` setzen, starten,
-   OASE-App am Handy öffnen. Das Add-on fängt den Key ab, **speichert ihn selbst**
-   (persistent in `/data/key.bin`), stellt den Modus **automatisch auf `bridge`**
-   und startet sich neu – kein manuelles Kopieren.
-   Firewall: der Add-on-Host muss das Handy erreichen (wie der bisherige Testhost).
-2. Danach läuft das Add-on als Bridge. Die Pumpe erscheint via MQTT-Discovery als
-   Gerät „OASE EGC Teichpumpe" mit Sensoren (Drehzahl, Wassertemperatur, Leistung)
-   und – wenn `enable_control: true` – Leistung (`number`) und Ein/Aus (`switch`).
+[![Add repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fjuniormajor%2FOase-EGC)
 
-**Key ändern:** erneut `mode: capture` laufen lassen (überschreibt automatisch),
-oder `device_password` in den Optionen setzen – die Option hat Vorrang vor dem
-automatisch gespeicherten Key.
+Or manually: **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add
+`https://github.com/juniormajor/Oase-EGC`, then install **OASE EGC Bridge**.
 
-## Optionen
-| Option | Bedeutung |
-|---|---|
-| `controller_ip` | IP des EGC Controllers (z. B. 172.17.30.5) |
-| `device_password` | Optionaler Geräte-Key (Vorrang); leer = automatisch abgefangener Key aus dem Capture |
-| `poll_interval` | Abfrageintervall in Sekunden |
-| `enable_control` | Schreiben (Leistung/Ein-Aus) freigeben |
-| `mode` | `bridge` (Normalbetrieb) oder `capture` (Key abfangen) |
+Configuration and usage: see [oase-egc-bridge/DOCS.md](oase-egc-bridge/DOCS.md).
 
-## Hinweise
-- Die Bridge hält eine **eigene** Verbindung; die OASE-App und Firmware-Updates
-  des Controllers bleiben parallel möglich (kein Exklusivmodus).
-- Der Controller **verbindet sich zurück** auf TCP 5999. Läuft das Add-on in einem
-  anderen Netz als der Controller, braucht es eine Firewall-Allow-Regel
-  `Controller → Add-on-Host:5999` (host_network ist aktiv).
+## Deutsch
+
+Lokale Anbindung der OASE-EGC-Teichpumpensteuerung an Home Assistant ohne
+Cloud und ohne OASE-Konto. Installation wie oben; die Dokumentation steht auf
+Englisch in [DOCS.md](oase-egc-bridge/DOCS.md).
+
+## License
+
+MIT – see [LICENSE](LICENSE). Not affiliated with or endorsed by OASE GmbH.
