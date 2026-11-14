@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.14
+
+- Base image pinned in the Dockerfile (`ghcr.io/home-assistant/base:3.24`); deprecated `build.yaml` removed.
+- armv7 dropped: the 3.24 base image is published for amd64 and aarch64 only.
+
 ## 0.1.13
 
 - Documentation and add-on description in English, MIT license.
