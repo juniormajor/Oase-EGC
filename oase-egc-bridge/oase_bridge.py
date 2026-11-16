@@ -150,7 +150,16 @@ class OnetSession:
         else:
             log.warning("No device_password set - reads/writes will fail")
 
-    def request(self, pt, payload, want, timeout=8):
+    def request(self, pt, payload, want, timeout=8, match=None):
+        """Send one request and return the payload of the matching reply.
+
+        A reply is accepted only if its packet type is `want` and, when given,
+        `match(payload)` is true. Anything else - in particular late replies to
+        earlier requests that timed out - is discarded. Without this check a late
+        reply is taken as the answer to the next request of the same type and
+        every following read is shifted (seen 2026-11-16: speed in the water
+        temperature field, pump reported off while running).
+        """
         with self._lock:
             self.sock.sendall(onet(pt,payload,self._nt()))
             end=time.time()+timeout
@@ -160,7 +169,9 @@ class OnetSession:
                     if not pr: break
                     rpt,_,rpl,consumed=pr
                     self._buf=self._buf[consumed:]
-                    if rpt==want: return rpl
+                    if rpt!=want: continue
+                    if match is None or match(rpl): return rpl
+                    log.debug("Discarding stale reply 0x%04X: %s", rpt, rpl[:32].hex())
                 try: chunk=self.sock.recv(4096)
                 except socket.timeout: break
                 if not chunk: raise ConnectionError("Connection closed")
@@ -184,7 +195,20 @@ class OnetSession:
         return None
 
     def rdm_get(self, manu, dev, pid, data=b""):
-        rep=self.request(PT_RDM, rdm_build(manu,dev,pid,0x20,data=data), PT_RDM_R)
+        def match(rep):
+            # RDM reply: PID at bytes 21-22; for parameter PIDs with an index
+            # (0x0201) the controller echoes the index as first value byte.
+            if len(rep)<24 or rep[0]!=0xCC: return False
+            if struct.unpack(">H",rep[21:23])[0]!=pid: return False
+            if data:
+                val=rdm_value(rep)
+                if not val or val[0]!=data[0]: return False
+            return True
+        try:
+            rep=self.request(PT_RDM, rdm_build(manu,dev,pid,0x20,data=data), PT_RDM_R, match=match)
+        except TimeoutError:
+            log.warning("No reply for PID 0x%04X%s", pid, f" index {data[0]}" if data else "")
+            raise
         return rdm_value(rep)
 
     def read_state(self, pump):
