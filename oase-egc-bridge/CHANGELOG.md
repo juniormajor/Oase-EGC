@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.15
+
+- Fix: replies are matched to their request by RDM PID and, for indexed values, the echoed index. Late replies to timed-out requests are discarded instead of being taken as the answer to the next read; before, a late reply shifted all following values (speed shown as water temperature, pump reported off and SFC on while the pump kept running) until the next control command.
+- A read without reply is logged as WARNING (was DEBUG).
+
 ## 0.1.14
 
 - Base image pinned in the Dockerfile (`ghcr.io/home-assistant/base:3.24`); deprecated `build.yaml` removed.
