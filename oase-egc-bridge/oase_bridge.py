@@ -80,14 +80,27 @@ def rdm_value(payload):
 def s16(b, off=0):
     return struct.unpack(">h", b[off:off+2])[0] if len(b)>=off+2 else None
 
+CERT_BACKDATE_S=3600
+
 def make_server_ctx():
     # Fresh certificate per connect using the CURRENT clock. Validity ends before
     # 2050 so notAfter is encoded as UTCTime (the controller's embedded TLS stack
     # does not understand GeneralizedTime from 2050 on and reports "expired").
+    # notBefore lies one hour back: the controller rejected a certificate created
+    # at the same second once with "certificate expired" (2026-11-19, its clock is
+    # presumably slightly behind). -not_before/-not_after need OpenSSL >= 3.4 (the
+    # 3.24 base image ships 3.5); older versions fall back to -days.
     d=tempfile.mkdtemp(); c=os.path.join(d,"c.pem"); k=os.path.join(d,"k.pem")
-    subprocess.run(["openssl","req","-x509","-newkey","rsa:2048","-keyout",k,"-out",c,
-                    "-days","3650","-nodes","-subj","/CN=com.oase.easycontrol"],
-                   check=True, capture_output=True)
+    base=["openssl","req","-x509","-newkey","rsa:2048","-keyout",k,"-out",c,
+          "-nodes","-subj","/CN=com.oase.easycontrol"]
+    now=time.time(); fmt="%y%m%d%H%M%SZ"  # UTCTime, notAfter stays before 2050
+    nb=time.strftime(fmt, time.gmtime(now-CERT_BACKDATE_S))
+    na=time.strftime(fmt, time.gmtime(now+3650*86400))
+    try:
+        subprocess.run(base+["-not_before",nb,"-not_after",na], check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        log.debug("openssl without -not_before - certificate starts now")
+        subprocess.run(base+["-days","3650"], check=True, capture_output=True)
     ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(c,k)
     try: ctx.minimum_version=ssl.TLSVersion.TLSv1
     except Exception: pass

@@ -5,6 +5,7 @@
 - Fix: a broken controller connection now rebuilds the session. Before, every read error was caught and logged at DEBUG only, including `[Errno 32] Broken pipe`; the bridge kept polling a dead connection, published nothing and never reconnected, so Home Assistant kept stale values and later showed them as unknown until the add-on was restarted (seen 2026-11-18/19, about 35 h).
 - Read timeouts still skip only the affected value. Connection errors (broken pipe, reset, TLS errors) end the session at once; three polls in a row without any value also end it. In both cases `Online` goes to OFF and the bridge reconnects after 10 s.
 - New WARNING "No values from controller (n/3)" for polls without any value.
+- The TLS certificate for the controller now starts one hour in the past (`openssl req -not_before`, OpenSSL 3.4 or later; older versions fall back to `-days`). The controller once rejected a certificate created in the same second as "certificate expired" and only accepted the next attempt 10 s later.
 
 ## 0.1.15
 
