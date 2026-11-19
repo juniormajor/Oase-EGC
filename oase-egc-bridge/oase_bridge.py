@@ -211,34 +211,39 @@ class OnetSession:
             raise
         return rdm_value(rep)
 
+    def _read(self, name, fn):
+        """Run one read. A missing or unusable reply only skips this value;
+        a broken connection (OSError other than a timeout, e.g. BrokenPipe,
+        ConnectionReset, SSL errors) is passed on so the session reconnects.
+        Before 0.1.16 every error was swallowed at DEBUG: after the connection
+        broke (2026-11-18 03:03) the bridge kept polling an empty session for
+        ~35 h, HA kept stale values and then showed unknown."""
+        try:
+            return fn()
+        except TimeoutError as e:
+            log.debug("%s: %s", name, e)
+        except OSError:
+            raise
+        except Exception as e:
+            log.debug("%s: %s", name, e)
+        return None
+
     def read_state(self, pump):
         m,d=pump["manu"],pump["dev"]; st={}
-        try: st["rpm"]=s16(self.rdm_get(m,d,0x0201,bytes([1])),1)
-        except Exception as e: log.debug("rpm: %s",e)
-        try: st["el_temp"]=s16(self.rdm_get(m,d,0x0201,bytes([4])),1)
-        except Exception as e: log.debug("el:%s",e)
-        try: st["water_temp"]=s16(self.rdm_get(m,d,0x0201,bytes([5])),1)
-        except Exception as e: log.debug("wt:%s",e)
-        try: st["power_w"]=s16(self.rdm_get(m,d,0x0201,bytes([10])),1)
-        except Exception as e: log.debug("pw:%s",e)
-        try:
-            sp=self.rdm_get(m,d,0x8039)
-            if sp: st["speed_raw"]=sp[0]; st["speed_pct"]=round(sp[0]*100/255)
-        except Exception as e: log.debug("sp:%s",e)
+        def idx(i): return lambda: s16(self.rdm_get(m,d,0x0201,bytes([i])),1)
+        for key,i in (("rpm",1),("el_temp",4),("water_temp",5),("power_w",10)):
+            v=self._read(key, idx(i))
+            if v is not None: st[key]=v
+        sp=self._read("sp", lambda: self.rdm_get(m,d,0x8039))
+        if sp: st["speed_raw"]=sp[0]; st["speed_pct"]=round(sp[0]*100/255)
         if st.get("speed_raw") and st["speed_raw"]>0: self.last_speed=st["speed_raw"]
         # SFC automatic (0x8038): 0 = off (manual), otherwise on
-        try:
-            md=self.rdm_get(m,d,0x8038)
-            if md is not None and len(md)>=1: st["sfc"]=md[0]!=0
-        except Exception as e: log.debug("sfc:%s",e)
-        try:
-            lv=s16(self.rdm_get(m,d,0x0201,bytes([9])),1)
-            if lv is not None: st["sfc_level"]={0:"Max",1:"Med",2:"Min"}.get(lv, str(lv))
-        except Exception as e: log.debug("sfclvl:%s",e)
-        try:
-            pw=self.rdm_get(m,d,0x1010)
-            if pw is not None and len(pw)>=1: st["on"]=pw[0]==0xFF
-        except Exception as e: log.debug("power:%s",e)
+        md=self._read("sfc", lambda: self.rdm_get(m,d,0x8038))
+        if md is not None and len(md)>=1: st["sfc"]=md[0]!=0
+        lv=self._read("sfclvl", idx(9))
+        if lv is not None: st["sfc_level"]={0:"Max",1:"Med",2:"Min"}.get(lv, str(lv))
+        pw=self._read("power", lambda: self.rdm_get(m,d,0x1010))
+        if pw is not None and len(pw)>=1: st["on"]=pw[0]==0xFF
         if st.get("power_w") is not None and st["power_w"]<0:
             st["power_w"]=0
         return st
@@ -363,6 +368,7 @@ DISC="homeassistant"; NODE="oase_egc"
 AVAIL=f"{NODE}/availability"
 CMD_SPEED=f"{NODE}/speed/set"; CMD_SFC=f"{NODE}/sfc/set"; CMD_POWER=f"{NODE}/power/set"
 cmd_q=queue.Queue()
+MAX_EMPTY_POLLS=3  # polls without any value before the session is rebuilt
 
 def mqtt_connect():
     c=mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="oase-egc-bridge")
@@ -394,6 +400,7 @@ def publish_discovery(c, pump):
     cfg("binary_sensor","online",{"name":"Online","state_topic":f"{NODE}/online","payload_on":"ON","payload_off":"OFF","device_class":"connectivity","entity_category":"diagnostic"})
 
 def publish_state(c, st):
+    if not st: return
     for k,topic in (("rpm","rpm"),("water_temp","water_temp"),("el_temp","el_temp"),
                     ("power_w","power_w"),("speed_raw","speed_raw"),("speed_pct","speed_pct"),
                     ("sfc_level","sfc_level")):
@@ -420,6 +427,7 @@ def run_bridge():
             log.info("Pump: article %s UID %04X:%08X DMX %d (index %d)",
                      pump["article"],pump["manu"],pump["dev"],pump["dmx"],pump["index"])
             publish_discovery(mc, pump)
+            empty=0
             while True:
                 # Process control commands (serialised with polling)
                 while not cmd_q.empty():
@@ -432,8 +440,14 @@ def run_bridge():
                         elif topic==CMD_POWER: sess.set_power(pump, val.strip().upper()=="ON")
                     except Exception as e: log.error("Control command %s=%s: %s",topic,val,e)
                 st=sess.read_state(pump)
-                publish_state(mc, st)
                 log.debug("state=%s", st)
+                if st:
+                    empty=0; publish_state(mc, st)
+                else:
+                    empty+=1
+                    log.warning("No values from controller (%d/%d)", empty, MAX_EMPTY_POLLS)
+                    if empty>=MAX_EMPTY_POLLS:
+                        raise ConnectionError(f"no values for {empty} polls")
                 time.sleep(max(2,POLL))
         except Exception as e:
             log.warning("Session error: %s - reconnecting in 10 s", e)
