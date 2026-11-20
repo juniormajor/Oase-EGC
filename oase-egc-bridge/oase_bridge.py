@@ -405,7 +405,7 @@ def publish_discovery(c, pump):
     cfg("sensor","water_temp",{"name":"Water temperature","state_topic":f"{NODE}/water_temp","unit_of_measurement":"°C","device_class":"temperature","state_class":"measurement"})
     cfg("sensor","el_temp",{"name":"Electronics temperature","state_topic":f"{NODE}/el_temp","unit_of_measurement":"°C","device_class":"temperature","state_class":"measurement"})
     cfg("sensor","power_w",{"name":"Power consumption","state_topic":f"{NODE}/power_w","unit_of_measurement":"W","device_class":"power","state_class":"measurement"})
-    cfg("sensor","speed_setpoint",{"name":"Speed setpoint","state_topic":f"{NODE}/speed_raw","unit_of_measurement":"/255","icon":"mdi:speedometer"})
+    cfg("sensor","speed_setpoint",{"name":"Speed setpoint","state_topic":f"{NODE}/speed_raw","unit_of_measurement":"/255","icon":"mdi:speedometer","state_class":"measurement"})
     cfg("number","speed",{"name":"Manual power","command_topic":CMD_SPEED,"state_topic":f"{NODE}/speed_pct","min":0,"max":100,"step":1,"unit_of_measurement":"%","icon":"mdi:fan"})
     cfg("switch","power",{"name":"Pump","command_topic":CMD_POWER,"state_topic":f"{NODE}/power_state","payload_on":"ON","payload_off":"OFF","icon":"mdi:water-pump"})
     cfg("switch","sfc",{"name":"SFC automatic","command_topic":CMD_SFC,"state_topic":f"{NODE}/sfc","payload_on":"ON","payload_off":"OFF","icon":"mdi:thermostat"})
