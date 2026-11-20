@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.17
+
+- `Speed setpoint` gets `state_class: measurement` in its MQTT discovery config, so Home Assistant keeps long-term statistics for it like for speed, temperatures and power.
+
 ## 0.1.16
 
 - Fix: a broken controller connection now rebuilds the session. Before, every read error was caught and logged at DEBUG only, including `[Errno 32] Broken pipe`; the bridge kept polling a dead connection, published nothing and never reconnected, so Home Assistant kept stale values and later showed them as unknown until the add-on was restarted (seen 2026-11-18/19, about 35 h).
